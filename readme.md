@@ -7,13 +7,13 @@ Async client for accessing financial reports (BFO) from the Russian tax service 
 Install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/madeinmo/bo-nalog-client.git
+pip install git+https://github.com/madeinmo/bo_nalog_client.git
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/madeinmo/bo-nalog-client.git
+git clone https://github.com/madeinmo/bo_nalog_client.git
 cd bo-nalog-client
 pip install -e .
 ```
