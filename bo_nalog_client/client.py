@@ -9,6 +9,11 @@ Number = Optional[float]
 Json = Union[Dict[str, Any], Iterable[Dict[str, Any]]]
 
 
+class AmbiguousSearchError(Exception):
+    """Raised when search query returns multiple organizations."""
+    pass
+
+
 _DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -29,8 +34,17 @@ class NalogClient:
     Async client for bo.nalog.gov.ru BFO endpoints.
 
     Usage:
+        # Using INN (integer)
         async with NalogClient() as nc:
-            year, revenue, profit = await nc.get_last_year_revenue_profit(9392519)
+            year, revenue, profit = await nc.get_last_year_revenue_profit(7735146464)
+        
+        # Using INN (string)
+        async with NalogClient() as nc:
+            year, revenue, profit = await nc.get_last_year_revenue_profit("7735146464")
+        
+        # Using company name
+        async with NalogClient() as nc:
+            year, revenue, profit = await nc.get_last_year_revenue_profit("ООО ПЛАЗЛЭЙ")
 
     If you already have an AsyncClient you'd like to reuse:
 
@@ -39,9 +53,14 @@ class NalogClient:
                 ...
 
     Public methods:
-        - fetch_bfo(org_id): returns raw JSON for the organization's BFO
+        - search_organizations(query): search for organizations by query
+        - resolve_org_id_from_search(response): resolve org_id from search response
+        - fetch_bfo(query): returns raw JSON for the organization's BFO
         - extract_last_year_revenue_profit(payload, prefer_bfo_date=False)
-        - get_last_year_revenue_profit(org_id, prefer_bfo_date=False)
+        - get_last_year_revenue_profit(query, prefer_bfo_date=False)
+        
+    Exceptions:
+        - AmbiguousSearchError: raised when search query matches multiple organizations
     """
     base_url: str = "https://bo.nalog.gov.ru"
     client: Optional[httpx.AsyncClient] = None
@@ -80,13 +99,74 @@ class NalogClient:
 
     # ---------- HTTP ----------
 
-    async def fetch_bfo(self, org_id: Union[int, str]) -> Iterable[Dict[str, Any]]:
+    async def search_organizations(self, query: str, page: int = 0, size: int = 20) -> Dict[str, Any]:
         """
-        Fetch the BFO list for a given organization ID.
-
-        Returns: iterable of report dicts.
+        Search for organizations by query (INN, OGRN, name, etc.).
+        
+        Returns: search response with organizations list.
         Raises: httpx.HTTPStatusError on non-2xx responses.
         """
+        url = f"{self.base_url}/advanced-search/organizations/search"
+        params = {"query": query, "page": page, "size": size}
+        resp = await self.client.get(url, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    def resolve_org_id_from_search(self, search_response: Dict[str, Any]) -> int:
+        """
+        Resolve organization ID from search response.
+        
+        Args:
+            search_response: Response from search_organizations method
+            
+        Returns:
+            Organization ID (int)
+            
+        Raises:
+            AmbiguousSearchError: If multiple organizations found
+            ValueError: If no organizations found
+        """
+        content = search_response.get("content", [])
+        total_elements = search_response.get("totalElements", 0)
+        
+        if total_elements == 0:
+            raise ValueError("No organizations found for the given query")
+        elif total_elements > 1:
+            # Get organization details for the error message
+            org_details = []
+            for org in content[:5]:  # Show first 5 matches
+                org_details.append(f"ID: {org.get('id')}, INN: {org.get('inn')}, Name: {org.get('shortName')}")
+            
+            error_msg = f"Multiple organizations found ({total_elements} total). First few matches:\n"
+            error_msg += "\n".join(org_details)
+            if total_elements > 5:
+                error_msg += f"\n... and {total_elements - 5} more"
+            
+            raise AmbiguousSearchError(error_msg)
+        
+        # Exactly one result
+        org_id = content[0].get("id")
+        if org_id is None:
+            raise ValueError("Organization ID not found in search response")
+        
+        return int(org_id)
+
+    async def fetch_bfo(self, query: Union[int, str]) -> Iterable[Dict[str, Any]]:
+        """
+        Fetch the BFO list for a given search query.
+
+        Args:
+            query: Search query (int/str) - can be INN, OGRN, company name, etc.
+            
+        Returns: iterable of report dicts.
+        Raises: httpx.HTTPStatusError on non-2xx responses.
+        Raises: AmbiguousSearchError: If query matches multiple organizations.
+        Raises: ValueError: If query matches no organizations.
+        """
+        # Always treat as search query
+        search_response = await self.search_organizations(str(query))
+        org_id = self.resolve_org_id_from_search(search_response)
+        
         url = f"{self.base_url}/nbo/organizations/{org_id}/bfo/"
         resp = await self.client.get(url)
         resp.raise_for_status()
@@ -202,13 +282,25 @@ class NalogClient:
 
     async def get_last_year_revenue_profit(
         self,
-        org_id: Union[int, str],
+        query: Union[int, str],
         *,
         prefer_bfo_date: bool = False
     ) -> Optional[Tuple[int, Number, Number]]:
         """
-        Fetch BFO for org_id and return (year, revenue_2110, net_profit_2400)
+        Fetch BFO for search query and return (year, revenue_2110, net_profit_2400)
         for the latest report.
+        
+        Args:
+            query: Search query (int/str) - can be INN, OGRN, company name, etc.
+            prefer_bfo_date: Whether to prefer BFO date over period for latest report
+            
+        Returns:
+            Tuple of (year, revenue, profit) or None if no data
+            
+        Raises:
+            httpx.HTTPStatusError: On API errors
+            AmbiguousSearchError: If query matches multiple organizations
+            ValueError: If query matches no organizations
         """
-        payload = await self.fetch_bfo(org_id)
+        payload = await self.fetch_bfo(query)
         return self.extract_last_year_revenue_profit(payload, prefer_bfo_date=prefer_bfo_date)
