@@ -29,6 +29,19 @@ async with client:
     print(f"Year: {year}, Revenue: {revenue}, Profit: {profit}")
 ```
 
+With proxy
+
+```python
+from bo_nalog_client import NalogClient
+
+client = NalogClient(
+    proxy='http://ncWPJwtp:gLmdwGYZ@85.143.54.202:64600'
+)
+async with client:
+    year, revenue, profit = await client.get_last_year_revenue_profit(9392519)
+    print(f"Year: {year}, Revenue: {revenue}, Profit: {profit}")
+```
+
 ## Features
 
 - Async HTTP client using httpx

@@ -65,6 +65,7 @@ class NalogClient:
     base_url: str = "https://bo.nalog.gov.ru"
     client: Optional[httpx.AsyncClient] = None
     timeout: float = 20.0
+    proxy: Optional[str] = None
 
     def __post_init__(self) -> None:
         self._own_client = False
@@ -73,6 +74,7 @@ class NalogClient:
                 headers=_DEFAULT_HEADERS.copy(),
                 timeout=self.timeout,
                 http2=True,
+                proxy=self.proxy
             )
             self._own_client = True
         else:
