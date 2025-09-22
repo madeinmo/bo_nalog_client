@@ -5,32 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bo-nalog-client"
 version = "0.0.1"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "Timur", email = "me@example.com"},
+]
 dependencies = [
-    "httpx>=0.24.0",
-    "pydantic>=2.0.0",
+    "httpx",
+    "pydantic",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-]
-
-[project.urls]
-Homepage = "https://github.com/yourusername/bo-nalog-client"
-Repository = "https://github.com/yourusername/bo-nalog-client"
-Issues = "https://github.com/yourusername/bo-nalog-client/issues"
-
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["bo_nalog_client*"]
-
-[tool.black]
-line-length = 88
-target-version = ['py38']
-
-[tool.isort]
-profile = "black"
-line_length = 88
