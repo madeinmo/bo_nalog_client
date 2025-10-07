@@ -57,8 +57,9 @@ class NalogClient:
                 ...
 
     Public methods:
-        - search_organizations(query): search for organizations by query
-        - resolve_org_id_from_search(response): resolve org_id from search response
+        - search_organization(query): search for an organization by query
+        - resolve_org_from_search(response, query): resolve organization dict from search response
+        - resolve_org_id_from_search(response, query): resolve org_id from search response
         - fetch_bfo(query): returns raw JSON for the organization's BFO
         - extract_last_year_revenue_profit(payload, prefer_bfo_date=False)
         - get_last_year_revenue_profit(query, prefer_bfo_date=False)
@@ -154,7 +155,7 @@ class NalogClient:
 
     # ---------- HTTP ----------
 
-    async def search_organizations(self, query: str, page: int = 0, size: int = 20) -> Dict[str, Any]:
+    async def _search_organizations(self, query: str, page: int = 0, size: int = 20) -> Dict[str, Any]:
         """
         Search for organizations by query (INN, OGRN, name, etc.).
         
@@ -168,20 +169,71 @@ class NalogClient:
         resp.raise_for_status()
         return resp.json()
 
-    def resolve_org_id_from_search(
+    async def search_organization(self, query: str) -> Dict[str, Any]:
+        """
+        Search for an organization by query (INN, OGRN, name, etc.).
+        
+        Returns:
+            Organization dict
+            ```json
+            {
+                "id": 9392519,
+                "inn": "7735146464",
+                "shortName": "<strong>ООО</strong> \"<strong>ПЛАЗЛЭЙ</strong>\"",
+                "ogrn": "1157746798945",
+                "index": "124498",
+                "region": "МОСКВА",
+                "district": null,
+                "city": "Зеленоград",
+                "settlement": null,
+                "street": "ГЕОРГИЕВСКИЙ",
+                "house": "5",
+                "building": "1",
+                "office": "2",
+                "okved2": "26.11",
+                "okopf": 12300,
+                "okato": null,
+                "okpo": null,
+                "okfs": null,
+                "statusCode": "ACTIVE",
+                "statusDate": "2015-08-31",
+                "bfo": {
+                    "period": "2024",
+                    "actualBfoDate": "2025-03-02",
+                    "gainSum": 55049,
+                    "knd": "0710096",
+                    "hasAz": false,
+                    "hasKs": false,
+                    "actualCorrectionNumber": 0,
+                    "actualCorrectionDate": "2025-03-02",
+                    "isCb": false,
+                    "bfoPeriodTypes": [
+                        12
+                    ]
+                }
+            }```
+            
+        Raises:
+            AmbiguousSearchError: If multiple organizations found and no exact match
+            ValueError: If no organizations found
+        """
+        search_response = await self._search_organizations(query)
+        return self.resolve_org_from_search(search_response, query)
+    
+    def resolve_org_from_search(
         self, 
         search_response: Dict[str, Any],
         query: Optional[str] = None
-    ) -> int:
+    ) -> Dict[str, Any]:
         """
-        Resolve organization ID from search response.
+        Resolve organization from search response.
         
         Args:
             search_response: Response from search_organizations method
             query: Original search query (optional, used for fuzzy matching)
             
         Returns:
-            Organization ID (int)
+            Organization dict
             
         Raises:
             AmbiguousSearchError: If multiple organizations found and no exact match
@@ -206,10 +258,7 @@ class NalogClient:
                     
                     # If exact match found, return it
                     if short_name_cleaned == query_cleaned:
-                        org_id = org.get("id")
-                        if org_id is None:
-                            raise ValueError("Organization ID not found in matched organization")
-                        return int(org_id)
+                        return org
             
             # No exact match found, raise error with organization details
             org_details = []
@@ -224,11 +273,33 @@ class NalogClient:
             raise AmbiguousSearchError(error_msg)
         
         # Exactly one result
-        org_id = content[0].get("id")
+        return content[0]
+    
+    def resolve_org_id_from_search(
+        self, 
+        search_response: Dict[str, Any],
+        query: Optional[str] = None
+    ) -> int:
+        """
+        Resolve organization ID from search response.
+        
+        Args:
+            search_response: Response from search_organizations method
+            query: Original search query (optional, used for fuzzy matching)
+            
+        Returns:
+            Organization ID (int)
+            
+        Raises:
+            AmbiguousSearchError: If multiple organizations found and no exact match
+            ValueError: If no organizations found or ID not found in organization
+        """
+        org = self.resolve_org_from_search(search_response, query)
+        org_id = org.get("id")
         if org_id is None:
             raise ValueError("Organization ID not found in search response")
-        
         return int(org_id)
+
 
     async def fetch_bfo(self, query: Union[int, str]) -> Iterable[Dict[str, Any]]:
         """
@@ -244,7 +315,7 @@ class NalogClient:
         """
         # Always treat as search query
         query_str = str(query)
-        search_response = await self.search_organizations(query_str)
+        search_response = await self._search_organizations(query_str)
         org_id = self.resolve_org_id_from_search(search_response, query=query_str)
         
         # Wait for delay before making the BFO request
