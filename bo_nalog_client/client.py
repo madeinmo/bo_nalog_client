@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import random
+import re
 import httpx
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from html import unescape
 
 Number = Optional[float]
 Json = Union[Dict[str, Any], Iterable[Dict[str, Any]]]
@@ -66,9 +70,14 @@ class NalogClient:
     client: Optional[httpx.AsyncClient] = None
     timeout: float = 20.0
     proxy: Optional[str] = None
+    min_delay: float = 0.5  # Minimum delay between requests in seconds
+    max_delay: float = 2.0  # Maximum delay between requests in seconds
 
     def __post_init__(self) -> None:
         self._own_client = False
+        self._request_lock = asyncio.Lock()  # Lock to prevent concurrent requests
+        self._last_request_time = 0.0  # Track last request time for delay calculation
+        
         if self.client is None:
             self.client = httpx.AsyncClient(
                 headers=_DEFAULT_HEADERS.copy(),
@@ -99,6 +108,50 @@ class NalogClient:
         if self.client is not None and not self.client.is_closed:
             await self.client.aclose()
 
+    # ---------- Request Management ----------
+    
+    async def _wait_for_delay(self) -> None:
+        """
+        Wait for a randomized delay between requests to prevent overwhelming the server.
+        Uses a lock to ensure only one request is processed at a time.
+        """
+        async with self._request_lock:
+            current_time = asyncio.get_event_loop().time()
+            time_since_last_request = current_time - self._last_request_time
+            
+            # Calculate random delay
+            delay = random.uniform(self.min_delay, self.max_delay)
+            
+            # If not enough time has passed since last request, wait for the remaining time
+            if time_since_last_request < delay:
+                wait_time = delay - time_since_last_request
+                await asyncio.sleep(wait_time)
+            
+            # Update last request time
+            self._last_request_time = asyncio.get_event_loop().time()
+
+    # ---------- String cleaning helpers ----------
+    
+    @staticmethod
+    def _clean_html(text: str) -> str:
+        """Remove HTML tags and decode HTML entities from text."""
+        if not text:
+            return ""
+        # Decode HTML entities (e.g., &quot;, &amp;, etc.)
+        text = unescape(text)
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        return text
+    
+    @staticmethod
+    def _clean_non_letters(text: str) -> str:
+        """Remove all non-letter characters and convert to lowercase."""
+        if not text:
+            return ""
+        # Keep only Cyrillic and Latin letters
+        cleaned = re.sub(r'[^а-яёА-ЯЁa-zA-Z]', '', text)
+        return cleaned.lower()
+
     # ---------- HTTP ----------
 
     async def search_organizations(self, query: str, page: int = 0, size: int = 20) -> Dict[str, Any]:
@@ -108,24 +161,30 @@ class NalogClient:
         Returns: search response with organizations list.
         Raises: httpx.HTTPStatusError on non-2xx responses.
         """
+        await self._wait_for_delay()
         url = f"{self.base_url}/advanced-search/organizations/search"
         params = {"query": query, "page": page, "size": size}
         resp = await self.client.get(url, params=params)
         resp.raise_for_status()
         return resp.json()
 
-    def resolve_org_id_from_search(self, search_response: Dict[str, Any]) -> int:
+    def resolve_org_id_from_search(
+        self, 
+        search_response: Dict[str, Any],
+        query: Optional[str] = None
+    ) -> int:
         """
         Resolve organization ID from search response.
         
         Args:
             search_response: Response from search_organizations method
+            query: Original search query (optional, used for fuzzy matching)
             
         Returns:
             Organization ID (int)
             
         Raises:
-            AmbiguousSearchError: If multiple organizations found
+            AmbiguousSearchError: If multiple organizations found and no exact match
             ValueError: If no organizations found
         """
         content = search_response.get("content", [])
@@ -134,7 +193,25 @@ class NalogClient:
         if total_elements == 0:
             raise ValueError("No organizations found for the given query")
         elif total_elements > 1:
-            # Get organization details for the error message
+            # Try to find exact match by cleaned organization name
+            if query:
+                query_cleaned = self._clean_non_letters(query)
+                
+                for org in content:
+                    short_name = org.get('shortName', '')
+                    # Clean from HTML
+                    short_name_clean_html = self._clean_html(short_name)
+                    # Clean from non-letters
+                    short_name_cleaned = self._clean_non_letters(short_name_clean_html)
+                    
+                    # If exact match found, return it
+                    if short_name_cleaned == query_cleaned:
+                        org_id = org.get("id")
+                        if org_id is None:
+                            raise ValueError("Organization ID not found in matched organization")
+                        return int(org_id)
+            
+            # No exact match found, raise error with organization details
             org_details = []
             for org in content[:5]:  # Show first 5 matches
                 org_details.append(f"ID: {org.get('id')}, INN: {org.get('inn')}, Name: {org.get('shortName')}")
@@ -166,9 +243,12 @@ class NalogClient:
         Raises: ValueError: If query matches no organizations.
         """
         # Always treat as search query
-        search_response = await self.search_organizations(str(query))
-        org_id = self.resolve_org_id_from_search(search_response)
+        query_str = str(query)
+        search_response = await self.search_organizations(query_str)
+        org_id = self.resolve_org_id_from_search(search_response, query=query_str)
         
+        # Wait for delay before making the BFO request
+        await self._wait_for_delay()
         url = f"{self.base_url}/nbo/organizations/{org_id}/bfo/"
         resp = await self.client.get(url)
         resp.raise_for_status()
