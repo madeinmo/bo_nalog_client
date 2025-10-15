@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, Iterable, Optional, Tuple, Union
 from html import unescape
+from .decoders.financial_results import FinancialResultsDecoder
 
 Number = Optional[float]
 Json = Union[Dict[str, Any], Iterable[Dict[str, Any]]]
@@ -457,3 +458,29 @@ class NalogClient:
         """
         payload = await self.fetch_bfo(query)
         return self.extract_last_year_revenue_profit(payload, prefer_bfo_date=prefer_bfo_date)
+    
+    def parse_yearly_financial_results(self, reports: Iterable[Dict[str, Any]]) -> list[dict]:
+        """
+        Parses BFO data to extract yearly financial results.
+        Returns a list of dicts with the 'year' key and decoded financial result fields.
+        """
+        yearly_financials = []
+        for report in reports:
+            yearly_result = {}
+            year = int(report['period'])
+            yearly_result["year"] = year
+            financial_result = report['typeCorrections'][0]['correction']['financialResult']
+            for field, value in financial_result.items():
+                if field.startswith('current'):
+                    code = int(field[len('current'):])
+                    name = FinancialResultsDecoder.decode(code)
+                    yearly_result[name] = value
+            yearly_financials.append(yearly_result)
+        return yearly_financials
+
+    async def get_yearly_financial_results(self, query: Union[int, str]) -> Dict[int, Dict[str, Any]]:
+        """
+        Fetch BFO for search query and return yearly financial results.
+        """
+        payload = await self.fetch_bfo(query)
+        return self.parse_yearly_financial_results(payload)
