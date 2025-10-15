@@ -84,7 +84,6 @@ class NalogClient:
             self.client = httpx.AsyncClient(
                 headers=_DEFAULT_HEADERS.copy(),
                 timeout=self.timeout,
-                http2=True,
                 proxy=self.proxy
             )
             self._own_client = True
