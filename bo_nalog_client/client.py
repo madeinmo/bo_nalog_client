@@ -249,6 +249,7 @@ class NalogClient:
             if query:
                 query_cleaned = self._clean_non_letters(query)
                 
+                candidates = []
                 for org in content:
                     short_name = org.get('shortName', '')
                     # Clean from HTML
@@ -258,7 +259,12 @@ class NalogClient:
                     
                     # If exact match found, return it
                     if short_name_cleaned == query_cleaned:
-                        return org
+                        candidates.append(org)
+                        
+                if len(candidates) == 1:
+                    return candidates[0]
+                elif len(candidates) > 1:
+                    raise AmbiguousSearchError(f"Multiple organizations found ({len(candidates)} total). First few matches:\n" + "\n".join([f"ID: {org.get('id')}, INN: {org.get('inn')}, Name: {org.get('shortName')}" for org in candidates]))
             
             # No exact match found, raise error with organization details
             org_details = []
